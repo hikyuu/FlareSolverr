@@ -5,6 +5,12 @@ on:
     tags:
       - "v*.*.*"
 
+# miao fork patch：只出 Windows onedir 压缩包（flaresolverr_windows_x64.zip）。
+# 用内置 GITHUB_TOKEN 取代上游的 GH_PAT：fork 后无需配置任何 secret，
+# release 与资产自动归属当前仓库。创建 release / 上传资产需要 contents: write。
+permissions:
+  contents: write
+
 jobs:
   create-release:
     name: Create release
@@ -28,15 +34,15 @@ jobs:
         with:
           body: ${{ steps.github_changelog.outputs.changelog }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-package:
-    name: Build binaries
+    name: Build Windows onedir zip
     needs: create-release
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-22.04, windows-latest]
+    # miao fork patch：上游是 ubuntu-22.04 + windows-latest 矩阵（linux 出
+    # flaresolverr_linux_x64.tar.gz）。这里只要 Windows 的 onedir 压缩包，
+    # 产物是 dist/flaresolverr_windows_x64.zip，下面的 glob 仍然匹配。
+    runs-on: windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -60,4 +66,4 @@ jobs:
         with:
           files: ./dist/flaresolverr_*
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

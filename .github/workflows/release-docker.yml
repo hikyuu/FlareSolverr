@@ -1,12 +1,14 @@
 name: Docker release
 
+# miao fork patch：Docker 镜像流水线**默认关闭**，只保留 onedir 压缩包发布链路
+# （见 release.yml）。文件保留是为了将来一键恢复，恢复方式：
+#   把下面的 `workflow_dispatch` 换回
+#     push: {tags: ["v*.*.*"]}
+#     pull_request: {branches: [master]}
+# 手动触发前需要先配置 secret：DOCKERHUB_USERNAME、DOCKERHUB_TOKEN、
+# 以及能推 ghcr.io 的 GITHUB_TOKEN（需 packages: write）。
 on:
-  push:
-    tags:
-      - "v*.*.*"
-  pull_request:
-    branches:
-      - master
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}

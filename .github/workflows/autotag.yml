@@ -3,7 +3,14 @@ name: Autotag
 on:
   push:
     branches:
-      - "master"
+      - "miao"
+
+# miao fork patch：用内置 GITHUB_TOKEN 取代 GH_PAT，fork 后无需额外 secret。
+# 打 tag 需要 contents: write。
+# 发布分支是 miao：master 仅用于跟随 upstream（同步上游不会误触发发版），
+# fork 的补丁与版本号都在 miao 上累积。改分支名时同步改这里和包里的 README。
+permissions:
+  contents: write
 
 jobs:
   tag-release:
@@ -15,5 +22,5 @@ jobs:
       - name: Auto tag
         uses: Klemensas/action-autotag@stable
         with:
-          GITHUB_TOKEN: "${{ secrets.GH_PAT }}"
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
           tag_prefix: "v"
