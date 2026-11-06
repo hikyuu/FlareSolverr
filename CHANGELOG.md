@@ -1,5 +1,10 @@
 # Changelog
 
+## v3.6.0 (2026/11/06)
+* [miao] Expose the CDP debugger ports of permanent sessions via `GET /cdp`
+* [miao] Cover `GET /cdp` with unit tests
+* [miao] Document `GET /cdp` in README
+
 ## v3.5.3 (2026/11/06)
 * Bring in upstream master: dependency bumps, turnstile key press jitter,
   single `--disable-features` emission, tmpfs mount for `/tmp`
