@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.5.3 (2026/11/06)
+* Bring in upstream master: dependency bumps, turnstile key press jitter,
+  single `--disable-features` emission, tmpfs mount for `/tmp`
+* [miao] Build the Windows package as an explicit PyInstaller onedir tree
+* [miao] Recognize localized (zh-CN / zh-TW) Cloudflare interstitial pages and
+  verify the `_cf_chl_opt` marker is gone before reporting success
+* [miao] Publish only the Windows zip, and tag/release from the `miao` branch
+  with the built-in `GITHUB_TOKEN`
+
 ## v3.5.2 (2026/09/12)
 * Update build_package.py
 * Disable breaking Local Network Access Checks popup
