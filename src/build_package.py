@@ -68,7 +68,10 @@ def download_chromium():
 
 def run_pyinstaller():
     sep = ';' if os.name == 'nt' else ':'
+    # miao fork patch: --onedir 显式声明。PyInstaller 6.x 的默认值就是 onedir，
+    # 但写死它才不会因为上游改默认值而让产物形态（单文件 vs 目录）静默变化。
     result = subprocess.run([sys.executable, "-m", "PyInstaller",
+                             "--onedir",
                              "--icon", "resources/flaresolverr_logo.ico",
                              "--add-data", f"package.json{sep}.",
                              "--add-data", f"{os.path.join('dist_chrome', 'chrome')}{sep}chrome",
