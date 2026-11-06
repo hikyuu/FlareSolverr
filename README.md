@@ -302,6 +302,43 @@ This works like `request.get`, with the addition of the postData parameter. Note
 | --------- | ------------------------------------------------------------------------ |
 | postData  | Must be a string with `application/x-www-form-urlencoded`. Eg: `a=b&c=d` |
 
+### CDP endpoint
+
+`GET /cdp` returns the Chrome DevTools Protocol (CDP) ports of the **permanent
+sessions** created with `sessions.create`. The optional `session` query parameter
+filters the result to one session id:
+
+```bash
+curl http://localhost:8191/cdp
+curl 'http://localhost:8191/cdp?session=miao-1a2b3c4d'
+```
+
+```json
+{
+  "status": "ok",
+  "port": 53214,
+  "sessions": [
+    {
+      "session": "miao-1a2b3c4d",
+      "host": "127.0.0.1",
+      "port": 53214,
+      "debuggerAddress": "127.0.0.1:53214"
+    }
+  ]
+}
+```
+
+- `port` is a shortcut for the first entry and is `null` when there is no
+  matching session; `sessions` is always a list.
+- Browsers created for a single `request.get` / `request.post` are destroyed as
+  soon as the request finishes, so they are **not** listed.
+- The debugging port is chosen by undetected-chromedriver at browser startup
+  and stays the same for the lifetime of the session. Use
+  `http://<host>:<port>/json/version` to obtain the browser WebSocket URL.
+- CDP listens on `127.0.0.1`, so this is only useful when FlareSolverr runs on
+  the same machine. **Anyone who can reach this endpoint can fully control the
+  browser** (and its cookies): never expose FlareSolverr to untrusted networks.
+
 ## Environment variables
 
 | Name                 | Default                | Notes                                                                                                                                    |
