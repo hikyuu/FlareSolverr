@@ -1,10 +1,12 @@
 import unittest
 from typing import Optional
+from unittest.mock import patch
 
 from webtest import TestApp
 
 from dtos import IndexResponse, HealthResponse, V1ResponseBase, STATUS_OK, STATUS_ERROR
 import flaresolverr
+import flaresolverr_service
 import utils
 
 
@@ -649,6 +651,107 @@ class TestFlareSolverr(unittest.TestCase):
 
         body = V1ResponseBase(res.json)
         self.assertEqual(STATUS_OK, body.status)
+
+
+class _FakeCdpOptions:
+    def __init__(self, address):
+        self.debugger_address = address
+
+
+class _FakeCdpDriver:
+    def __init__(self, address=None, capabilities=None, with_options=True):
+        if with_options:
+            self.options = _FakeCdpOptions(address)
+        self.capabilities = capabilities if capabilities is not None else {}
+
+
+class _FakeCdpSession:
+    def __init__(self, session_id, driver):
+        self.session_id = session_id
+        self.driver = driver
+
+
+class _FakeSessionsStorage:
+    def __init__(self, sessions):
+        self._sessions = sessions
+
+    def all_sessions(self):
+        return list(self._sessions)
+
+
+class TestCdpEndpoint(unittest.TestCase):
+    """GET /cdp is pure bookkeeping: these tests never launch Chrome."""
+
+    app = TestApp(flaresolverr.app)
+
+    def _install_sessions(self, *sessions):
+        patcher = patch.object(flaresolverr_service, 'SESSIONS_STORAGE',
+                               _FakeSessionsStorage(list(sessions)))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_cdp_endpoint_without_sessions(self):
+        self._install_sessions()
+
+        res = self.app.get('/cdp')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual({"status": STATUS_OK, "port": None, "sessions": []}, res.json)
+
+    def test_cdp_endpoint_lists_session_ports(self):
+        self._install_sessions(
+            _FakeCdpSession('alpha', _FakeCdpDriver('127.0.0.1:53214')),
+            _FakeCdpSession('beta', _FakeCdpDriver('127.0.0.1:53215')),
+        )
+
+        res = self.app.get('/cdp')
+        self.assertEqual(res.status_code, 200)
+        body = res.json
+        self.assertEqual(STATUS_OK, body['status'])
+        self.assertEqual(53214, body['port'])
+        self.assertEqual([
+            {"session": "alpha", "host": "127.0.0.1", "port": 53214,
+             "debuggerAddress": "127.0.0.1:53214"},
+            {"session": "beta", "host": "127.0.0.1", "port": 53215,
+             "debuggerAddress": "127.0.0.1:53215"},
+        ], body['sessions'])
+
+    def test_cdp_endpoint_filters_by_session(self):
+        self._install_sessions(
+            _FakeCdpSession('alpha', _FakeCdpDriver('127.0.0.1:53214')),
+            _FakeCdpSession('beta', _FakeCdpDriver('127.0.0.1:53215')),
+        )
+
+        body = self.app.get('/cdp?session=beta').json
+        self.assertEqual(53215, body['port'])
+        self.assertEqual(['beta'], [s['session'] for s in body['sessions']])
+
+    def test_cdp_endpoint_unknown_session(self):
+        self._install_sessions(
+            _FakeCdpSession('alpha', _FakeCdpDriver('127.0.0.1:53214')),
+        )
+
+        body = self.app.get('/cdp?session=missing').json
+        self.assertIsNone(body['port'])
+        self.assertEqual([], body['sessions'])
+
+    def test_cdp_endpoint_skips_drivers_without_valid_address(self):
+        self._install_sessions(
+            _FakeCdpSession('no-options', _FakeCdpDriver(with_options=False)),
+            _FakeCdpSession('bad-port', _FakeCdpDriver('127.0.0.1:not-a-port')),
+            _FakeCdpSession('good', _FakeCdpDriver('127.0.0.1:53214')),
+        )
+
+        body = self.app.get('/cdp').json
+        self.assertEqual(53214, body['port'])
+        self.assertEqual(['good'], [s['session'] for s in body['sessions']])
+
+    def test_get_cdp_debugger_address_capabilities_fallback(self):
+        driver = _FakeCdpDriver(
+            with_options=False,
+            capabilities={'goog:chromeOptions': {'debuggerAddress': '127.0.0.1:9222'}},
+        )
+        self.assertEqual('127.0.0.1:9222', utils.get_cdp_debugger_address(driver))
+        self.assertIsNone(utils.get_cdp_debugger_address(_FakeCdpDriver()))
 
 
 if __name__ == '__main__':
