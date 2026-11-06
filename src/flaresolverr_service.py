@@ -38,6 +38,14 @@ ACCESS_DENIED_SELECTORS = [
 CHALLENGE_TITLES = [
     # Cloudflare
     'Just a moment...',
+    # Cloudflare, the interstitial title is translated to the browser language.
+    # Only the two Chinese variants are listed here because the localized page
+    # is always detected through CLOUDFLARE_CHALLENGE_JS_MARKER as well, which
+    # does not depend on the UI language.
+    '请稍候…',  # zh-CN
+    '请稍候...',
+    '請稍候…',  # zh-TW
+    '請稍候...',
     # DDoS-GUARD
     'DDoS-Guard'
 ]
@@ -53,6 +61,12 @@ CHALLENGE_SELECTORS = [
 TURNSTILE_SELECTORS = [
     "input[name='cf-turnstile-response']"
 ]
+
+# Cloudflare's own interstitial page always defines this object, whatever the UI
+# language is.  A site that merely embeds a Turnstile widget does not (it only
+# loads challenges.cloudflare.com/turnstile/v0/api.js), so this marker separates
+# "Cloudflare is challenging us" from "this page has a captcha".
+CLOUDFLARE_CHALLENGE_JS_MARKER = '_cf_chl_opt'
 
 SESSIONS_STORAGE = SessionsStorage()
 
@@ -258,6 +272,20 @@ def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
             logging.debug('A used instance of webdriver has been destroyed')
 
 
+def cloudflare_challenge_page_shown(driver: WebDriver) -> bool:
+    """Tell whether the browser is still displaying Cloudflare's own interstitial.
+
+    The interstitial is localized, so its title and wording cannot be used to
+    recognize it in every language.  The ``_cf_chl_opt`` object, however, is
+    always defined by the challenge script.  Never raises: a failure here must
+    not change how a challenge is resolved.
+    """
+    try:
+        return CLOUDFLARE_CHALLENGE_JS_MARKER in (driver.page_source or '')
+    except Exception:
+        return False
+
+
 def click_verify(driver: WebDriver, num_tabs: int = 1):
     try:
         logging.debug("Try to find the Cloudflare verify checkbox...")
@@ -427,6 +455,12 @@ def _evil_logic(req: V1RequestBase, driver: WebDriver, method: str) -> Challenge
                 challenge_found = True
                 logging.info("Challenge detected. Selector found: " + selector)
                 break
+    if not challenge_found and cloudflare_challenge_page_shown(driver):
+        # the title is translated to the browser language and the markers above
+        # are from older interstitial templates, so fall back to the challenge
+        # script itself before concluding that there is nothing to solve
+        challenge_found = True
+        logging.info("Challenge detected. Cloudflare challenge page marker found")
 
     browser_wait_timeout = utils.get_config_browser_wait_timeout()
     attempt = 0
@@ -444,6 +478,12 @@ def _evil_logic(req: V1RequestBase, driver: WebDriver, method: str) -> Challenge
                     logging.debug("Waiting for selector (attempt " + str(attempt) + "): " + selector)
                     WebDriverWait(driver, browser_wait_timeout).until_not(
                         presence_of_element_located((By.CSS_SELECTOR, selector)))
+
+                # a localized interstitial can keep the legacy title and
+                # markers out of the DOM while it is still verifying, so only
+                # treat it as solved once the challenge script is gone
+                if cloudflare_challenge_page_shown(driver):
+                    raise TimeoutException("Cloudflare challenge page still displayed")
 
                 # all elements not found
                 break
