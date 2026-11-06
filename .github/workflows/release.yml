@@ -2,46 +2,94 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches:
+      - "miao"
+  workflow_dispatch:
 
-# miao fork patch：只出 Windows onedir 压缩包（flaresolverr_windows_x64.zip）。
-# 用内置 GITHUB_TOKEN 取代上游的 GH_PAT：fork 后无需配置任何 secret，
-# release 与资产自动归属当前仓库。创建 release / 上传资产需要 contents: write。
+# miao fork patch：发布链路合并成**单个** workflow。
+# 上游是「autotag 打 tag → tag push 触发 release」两段式，它依赖 GH_PAT：
+# 用内置 GITHUB_TOKEN 打出的 tag 属于「token 产生的事件」，GitHub 不会为它新建
+# workflow run（防递归），两段式在只用 GITHUB_TOKEN 的 fork 里必然断链。
+# 这里改为「push 到 miao → 读 package.json 的 version → 同一次运行里建 tag +
+# release + 出包」，不依赖事件链，也不需要任何自定义 secret。
+# 只在 Windows 上出 onedir 压缩包（flaresolverr_windows_x64.zip）。
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  create-release:
-    name: Create release
+  meta:
+    name: Resolve version and create release
     runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      skip: ${{ steps.guard.outputs.skip }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
+          # 需要完整历史来算「上一个 tag..HEAD」的 changelog
           fetch-depth: 0
 
-      - name: Build changelog
-        id: github_changelog
+      - name: Read version from package.json
+        id: version
         run: |
-          changelog=$(git log $(git tag | tail -2 | head -1)..HEAD --no-merges --oneline)
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          echo "$changelog" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          version=$(python3 -c 'import json;print(json.load(open("package.json"))["version"])')
+          echo "package.json version: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      # 版本号没变就什么都不做：发版由 bump 驱动，避免每次 push 重复出包。
+      - name: Skip when the release already exists
+        id: guard
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v$VERSION 已存在，跳过。要让本工作流发版请先 bump package.json。"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build changelog
+        if: steps.guard.outputs.skip == 'false'
+        id: changelog
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # 排除目标 tag 本身：tag 可能已由旧流程建好，而 release 还没有
+          previous=$(git tag --sort=v:refname | grep -v "^v${VERSION}$" | tail -1)
+          echo "previous tag: ${previous:-<none>}"
+          echo "changelog<<EOF" >> "$GITHUB_OUTPUT"
+          if [ -n "$previous" ]; then
+            git log "${previous}..HEAD" --no-merges --oneline >> "$GITHUB_OUTPUT"
+          else
+            git log --no-merges --oneline >> "$GITHUB_OUTPUT"
+          fi
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      # 同一 run 内建 release；tag 不存在时由该 action 一并创建。
       - name: Create release
+        if: steps.guard.outputs.skip == 'false'
         uses: softprops/action-gh-release@v3
         with:
-          body: ${{ steps.github_changelog.outputs.changelog }}
+          tag_name: v${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          body: ${{ steps.changelog.outputs.changelog }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-package:
     name: Build Windows onedir zip
-    needs: create-release
+    needs: meta
+    if: needs.meta.outputs.skip == 'false'
     # miao fork patch：上游是 ubuntu-22.04 + windows-latest 矩阵（linux 出
     # flaresolverr_linux_x64.tar.gz）。这里只要 Windows 的 onedir 压缩包，
-    # 产物是 dist/flaresolverr_windows_x64.zip，下面的 glob 仍然匹配。
+    # 产物是 dist/flaresolverr_windows_x64.zip。
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -61,9 +109,8 @@ jobs:
           cd src
           python build_package.py
 
-      - name: Upload release artifacts
-        uses: softprops/action-gh-release@v3
-        with:
-          files: ./dist/flaresolverr_*
+      - name: Upload release asset
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: gh release upload "v$VERSION" ./dist/flaresolverr_windows_x64.zip --clobber --repo "${{ github.repository }}"

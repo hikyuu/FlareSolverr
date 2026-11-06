@@ -9,26 +9,45 @@
 
 | 文件 | 触发 | 产物 | 状态 |
 | --- | --- | --- | --- |
-| `autotag.yml` | push 到 `miao` | 按 `package.json` 的 `version` 打 `v*.*.*` tag | 启用 |
-| `release.yml` | push `v*.*.*` tag | release + `flaresolverr_windows_x64.zip` | 启用 |
+| `release.yml` | push 到 `miao`（或手动 dispatch） | 打 `v*.*.*` tag + release + `flaresolverr_windows_x64.zip` | 启用 |
+| `autotag.yml` | 仅 `workflow_dispatch` | 上游的两段式打 tag | **已停用**（见下） |
 | `release-docker.yml` | 仅 `workflow_dispatch`（手动） | 多架构 Docker 镜像（DockerHub / ghcr.io） | **禁用自动触发** |
 
 ## 发布链路
 
 ```
 push 到 miao
-  └─ autotag.yml        读 package.json version → 打 tag vX.Y.Z
-       └─ release.yml   tag 触发
-            ├─ create-release   （ubuntu-22.04）按上一个 tag..HEAD 生成 changelog
-            └─ build-package    （windows-latest）
-                 ├─ pip install -r requirements.txt
-                 ├─ pip install pyinstaller==6.22.2
-                 ├─ cd src && python build_package.py
-                 │    ├─ download_chromium()   下 Chromium snapshot
-                 │    ├─ run_pyinstaller()     --onedir（显式）
-                 │    └─ compress_package()    dist/flaresolverr_windows_x64.zip
-                 └─ 上传 ./dist/flaresolverr_* 到 release
+  └─ release.yml（单次运行，两步 job）
+       ├─ meta            （ubuntu-22.04）
+       │    ├─ 读 package.json 的 version
+       │    ├─ gh release view 已存在 → skip（不 bump 就不发版）
+       │    ├─ 按「上一个 tag..HEAD」生成 changelog（--sort=v:refname）
+       │    └─ 建 tag vX.Y.Z + release
+       └─ build-package   （windows-latest，needs: meta，skip 时整段跳过）
+            ├─ pip install -r requirements.txt
+            ├─ pip install pyinstaller==6.22.2
+            ├─ cd src && python build_package.py
+            │    ├─ download_chromium()   下 Chromium snapshot
+            │    ├─ run_pyinstaller()     --onedir（显式）
+            │    └─ compress_package()    dist/flaresolverr_windows_x64.zip
+            └─ gh release upload vX.Y.Z ./dist/flaresolverr_windows_x64.zip --clobber
 ```
+
+### 为什么不是上游的两段式
+
+上游 `autotag.yml` 打 tag → tag push 触发 `release.yml`。这条链**只在用 PAT 时成立**：
+用内置 `GITHUB_TOKEN` 打出的 tag 属于「token 产生的事件」，GitHub 不会为它新建
+workflow run（防递归规则，`workflow_dispatch` / `repository_dispatch` 除外）。
+
+fork 不想维护 PAT，所以把打 tag 与出包合并进 `release.yml` 的同一次运行——同一次
+运行内的 job 之间用 `needs` 串联，不经过事件系统，因此不受该规则影响。
+
+恢复两段式（需要 PAT）：
+
+1. `autotag.yml` 的 `on:` 改回 `push: branches: ["miao"]`
+2. `release.yml` 的 `on:` 改回 `push: tags: ["v*.*.*"]`
+3. 两个 workflow 的 `secrets.GITHUB_TOKEN` 换成同一个 PAT secret（如 `RELEASE_PAT`）
+
 
 `flaresolverr_windows_x64.zip` 解压后是 **onedir 目录**：
 
@@ -44,19 +63,20 @@ flaresolverr/
 
 ## fork 自建发布所需的配置
 
-**不需要任何自定义 secret**。三处 `secrets.GH_PAT` 已换成内置 `secrets.GITHUB_TOKEN`，
-两个启用的工作流都加了 `permissions: contents: write`（创建 release、上传资产、打 tag 都需要）。
+**不需要任何自定义 secret**。`secrets.GH_PAT` 已换成内置 `secrets.GITHUB_TOKEN`，
+启用中的 `release.yml` 声明了 `permissions: contents: write`（建 tag / release、上传资产都需要）。
 
 | 项 | 值 | 说明 |
 | --- | --- | --- |
 | Secret | 无 | 用仓库自动注入的 `GITHUB_TOKEN` |
 | 权限 | `contents: write` | 已在 workflow 内声明，无需改仓库设置 |
-| 发布分支 | `miao` | `autotag.yml` 的分支过滤写的是 `miao`；fork 若用别的名字要同步改 |
+| 发布分支 | `miao` | `release.yml` 的 push 过滤写的是 `miao`；fork 若用别的名字要同步改 |
 | 上游分支 | `master` | 只跟随 `upstream/master`，推它不会触发发版 |
 | Release 归属 | 当前仓库 | `softprops/action-gh-release` 默认作用域就是运行时仓库，无需改仓库名 |
 
-发布流程：把 `package.json` 的 `version` 改成目标版本并推 `miao`（或把改动合入
-`miao`），`autotag.yml` 会打 tag，随后 `release.yml` 自动出包。
+发布流程：把 `package.json` 的 `version` 改成目标版本并推 `miao`，`release.yml` 在
+同一次运行里打 tag、建 release、出 Windows 包。**版本号没变就不会发版**（`meta` job
+的 `gh release view` 命中即 skip），所以每次要发布都必须 bump。
 
 ## 恢复 Docker 流水线
 

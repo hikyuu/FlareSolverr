@@ -1,14 +1,15 @@
 name: Autotag
 
 on:
-  push:
-    branches:
-      - "miao"
+  workflow_dispatch:
 
-# miao fork patch：用内置 GITHUB_TOKEN 取代 GH_PAT，fork 后无需额外 secret。
-# 打 tag 需要 contents: write。
-# 发布分支是 miao：master 仅用于跟随 upstream（同步上游不会误触发发版），
-# fork 的补丁与版本号都在 miao 上累积。改分支名时同步改这里和包里的 README。
+# miao fork patch：**已停用**（原触发条件是 push 到 miao）。
+# 原因：本 workflow 用内置 GITHUB_TOKEN 打 tag，而 GITHUB_TOKEN 产生的事件不会
+# 触发新的 workflow run（GitHub 防递归规则），所以它打出的 tag 永远点不亮
+# release.yml —— 两段式链路只在用 PAT 时成立。
+# 现在打 tag 与出包合并进 release.yml 的同一次运行，本文件仅保留上游做法备查。
+# 若要恢复两段式：把 on 改回 push/branches，在 release.yml 里换回 tag 触发，
+# 并给 autotag 与 release 都配置一个 PAT（例如 secrets.RELEASE_PAT）。
 permissions:
   contents: write
 
