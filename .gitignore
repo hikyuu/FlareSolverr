@@ -127,3 +127,16 @@ dmypy.json
 
 # node
 node_modules/
+
+# Local bundled Chrome / Chromium used at runtime (see src/utils.py get_chrome_exe_path)
+src/chrome/
+
+# Local javdb automation — 本地实验代码，不属于上游 fork，也不随 release 发布。
+# 内含凭据存取（tools/cred_store.py）、验证码 OCR（tools/ocr-service/）与
+# 浏览器登录脚本，只留在本机工作区，永不推送。
+tools/javdb-ts/
+tools/javdb_login.py
+tools/javdb_login_http.py
+tools/ocr-service/
+tools/cred_store.py
+docs/javdb-client.md
