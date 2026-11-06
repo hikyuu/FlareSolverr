@@ -18,9 +18,10 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.wait import WebDriverWait
 
 import utils
-from dtos import (STATUS_ERROR, STATUS_OK, ChallengeResolutionResultT,
-                  ChallengeResolutionT, HealthResponse, IndexResponse,
-                  V1RequestBase, V1ResponseBase)
+from dtos import (STATUS_ERROR, STATUS_OK, CdpResponse,
+                  ChallengeResolutionResultT, ChallengeResolutionT,
+                  HealthResponse, IndexResponse, V1RequestBase,
+                  V1ResponseBase)
 from sessions import SessionsStorage
 
 ACCESS_DENIED_TITLES = [
@@ -106,6 +107,49 @@ def index_endpoint() -> IndexResponse:
 def health_endpoint() -> HealthResponse:
     res = HealthResponse({})
     res.status = STATUS_OK
+    return res
+
+
+def cdp_endpoint(session_id: str = None) -> CdpResponse:
+    """List the DevTools Protocol ports of the long-lived browser sessions.
+
+    Browsers created for a single ``request.get`` are destroyed before the
+    caller could connect to them, so only sessions held in SESSIONS_STORAGE are
+    reported. ``session_id`` optionally narrows the result to one session.
+    """
+    res = CdpResponse({})
+    res.status = STATUS_OK
+    res.sessions = []
+
+    for session in SESSIONS_STORAGE.all_sessions():
+        if session_id is not None and session.session_id != session_id:
+            continue
+
+        address = utils.get_cdp_debugger_address(session.driver)
+        if not address:
+            logging.warning("Session %s has no CDP debugger address", session.session_id)
+            continue
+
+        host, separator, raw_port = address.rpartition(':')
+        try:
+            port = int(raw_port)
+        except ValueError:
+            port = 0
+        if not separator or not 1 <= port <= 65535:
+            logging.warning("Session %s has an invalid CDP debugger address: %s",
+                            session.session_id, address)
+            continue
+
+        res.sessions.append({
+            "session": session.session_id,
+            "host": host or '127.0.0.1',
+            "port": port,
+            "debuggerAddress": address
+        })
+
+    # Convenience field: callers that only need "a browser to talk to" can use
+    # `port` without iterating over `sessions`.
+    res.port = res.sessions[0]['port'] if res.sessions else None
     return res
 
 

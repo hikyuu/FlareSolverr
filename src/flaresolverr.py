@@ -49,6 +49,16 @@ def health():
     return utils.object_to_dict(res)
 
 
+@app.route('/cdp')
+def cdp():
+    """
+    Chrome DevTools Protocol ports of the running browser sessions.
+    Optional query parameter: session=<session id>
+    """
+    res = flaresolverr_service.cdp_endpoint(request.query.get('session') or None)
+    return utils.object_to_dict(res)
+
+
 @app.post('/v1')
 def controller_v1():
     """

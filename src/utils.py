@@ -7,6 +7,7 @@ import shutil
 import sys
 import tempfile
 import urllib.parse
+from typing import Optional
 
 from selenium.webdriver.chrome.webdriver import WebDriver
 import undetected_chromedriver as uc
@@ -261,6 +262,28 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
     # driver = webdriver.Chrome(options=options)
 
     return driver
+
+
+def get_cdp_debugger_address(driver: WebDriver) -> Optional[str]:
+    """Return the DevTools Protocol address (``host:port``) used by a driver.
+
+    undetected_chromedriver picks a free port for ``--remote-debugging-port``
+    and writes it back to ``options.debugger_address`` while constructing
+    ``Chrome()``. Reading it from the driver avoids scraping process command
+    lines, which is Windows-only and races with short-lived browsers.
+    """
+    options = getattr(driver, 'options', None)
+    address = getattr(options, 'debugger_address', None)
+    if address:
+        return address
+
+    # ChromeDriver echoes the same address in the session capabilities when it
+    # attaches to an already running Chrome. Keep it as a fallback for drivers
+    # that do not retain the options object.
+    try:
+        return driver.capabilities['goog:chromeOptions']['debuggerAddress']
+    except (AttributeError, KeyError, TypeError):
+        return None
 
 
 def get_chrome_exe_path() -> str:

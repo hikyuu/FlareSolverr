@@ -82,3 +82,12 @@ class SessionsStorage:
 
     def session_ids(self) -> list[str]:
         return list(self.sessions.keys())
+
+    def all_sessions(self) -> list[Session]:
+        """Snapshot of the active sessions.
+
+        Returns a list so callers can iterate while another request creates or
+        destroys a session without raising "dictionary changed size during
+        iteration".
+        """
+        return list(self.sessions.values())

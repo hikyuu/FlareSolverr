@@ -92,3 +92,13 @@ class HealthResponse(object):
 
     def __init__(self, _dict):
         self.__dict__.update(_dict)
+
+
+class CdpResponse(object):
+    """Response of GET /cdp: CDP ports of the long-lived browser sessions."""
+    status: str = None
+    port: int = None
+    sessions: list = None
+
+    def __init__(self, _dict):
+        self.__dict__.update(_dict)
