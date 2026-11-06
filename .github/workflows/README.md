@@ -17,21 +17,24 @@
 
 ```
 push 到 miao
-  └─ release.yml（单次运行，两步 job）
-       ├─ meta            （ubuntu-22.04）
-       │    ├─ 读 package.json 的 version
-       │    ├─ gh release view 已存在 → skip（不 bump 就不发版）
-       │    ├─ 按「上一个 tag..HEAD」生成 changelog（--sort=v:refname）
-       │    └─ 建 tag vX.Y.Z + release
-       └─ build-package   （windows-latest，needs: meta，skip 时整段跳过）
-            ├─ pip install -r requirements.txt
-            ├─ pip install pyinstaller==6.22.2
-            ├─ cd src && python build_package.py
-            │    ├─ download_chromium()   下 Chromium snapshot
-            │    ├─ run_pyinstaller()     --onedir（显式）
-            │    └─ compress_package()    dist/flaresolverr_windows_x64.zip
-            └─ gh release upload vX.Y.Z ./dist/flaresolverr_windows_x64.zip --clobber
+  └─ release.yml（单次运行、单个 job，windows-latest）
+       ├─ 读 package.json 的 version
+       ├─ gh release view 已存在 → skip（不 bump 就不发版）
+       ├─ 生成 changelog：上一个 tag..HEAD（--sort=v:refname；本仓库无历史
+       │  tag 时回退到上游 tag 作基线，再不行只取最近 30 条）
+       ├─ pip install -r requirements.txt
+       ├─ pip install pyinstaller==6.22.2
+       ├─ cd src && python build_package.py
+       │    ├─ download_chromium()   下 Chromium snapshot
+       │    ├─ run_pyinstaller()     --onedir（显式）
+       │    └─ compress_package()    dist/flaresolverr_windows_x64.zip
+       └─ softprops/action-gh-release：一次性建 tag + release + 上传 zip
 ```
+
+> 构建与发版必须在同一个 job 里。曾经拆成 `meta`/`build-package` 两个 job，用
+> `gh release upload <tag>` 反查 release，实测 release 建完两分钟后仍可能返回
+> `Release not yet discoverable by tag` → 上传 404。现在由 action 在建 release 的
+> 同一个调用里顺带传资产，不再有按 tag 反查的窗口期。
 
 ### 为什么不是上游的两段式
 
@@ -40,7 +43,7 @@ push 到 miao
 workflow run（防递归规则，`workflow_dispatch` / `repository_dispatch` 除外）。
 
 fork 不想维护 PAT，所以把打 tag 与出包合并进 `release.yml` 的同一次运行——同一次
-运行内的 job 之间用 `needs` 串联，不经过事件系统，因此不受该规则影响。
+运行内的步骤不经过事件系统，因此不受该规则影响。
 
 恢复两段式（需要 PAT）：
 
@@ -75,8 +78,9 @@ flaresolverr/
 | Release 归属 | 当前仓库 | `softprops/action-gh-release` 默认作用域就是运行时仓库，无需改仓库名 |
 
 发布流程：把 `package.json` 的 `version` 改成目标版本并推 `miao`，`release.yml` 在
-同一次运行里打 tag、建 release、出 Windows 包。**版本号没变就不会发版**（`meta` job
-的 `gh release view` 命中即 skip），所以每次要发布都必须 bump。
+同一次运行里打 tag、建 release、出 Windows 包。**版本号没变就不会发版**（`Skip when
+the release already exists` 步骤的 `gh release view` 命中即整段 skip），所以每次要
+发布都必须 bump。
 
 ## 恢复 Docker 流水线
 

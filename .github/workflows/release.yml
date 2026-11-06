@@ -6,12 +6,14 @@ on:
       - "miao"
   workflow_dispatch:
 
-# miao fork patch：发布链路合并成**单个** workflow。
-# 上游是「autotag 打 tag → tag push 触发 release」两段式，它依赖 GH_PAT：
-# 用内置 GITHUB_TOKEN 打出的 tag 属于「token 产生的事件」，GitHub 不会为它新建
-# workflow run（防递归），两段式在只用 GITHUB_TOKEN 的 fork 里必然断链。
-# 这里改为「push 到 miao → 读 package.json 的 version → 同一次运行里建 tag +
-# release + 出包」，不依赖事件链，也不需要任何自定义 secret。
+# miao fork patch：发版只有**一个** job、一次运行。
+# ① 上游是「autotag 打 tag → tag push 触发 release」两段式，它依赖 GH_PAT：
+#    用内置 GITHUB_TOKEN 打出的 tag 属于「token 产生的事件」，GitHub 不会为它新建
+#    workflow run（防递归），两段式在只用 GITHUB_TOKEN 的 fork 里必然断链。
+# ② 早期版本把「建 release」和「上传资产」拆成两个 job，靠 `gh release upload <tag>`
+#    反查 release，实测建完两分钟后仍可能 404（Release not yet discoverable by
+#    tag）。现在改为同一个 job 内先构建、再由 action 一次性建 release + 上传资产，
+#    彻底不经过「按 tag 反查」这一步。
 # 只在 Windows 上出 onedir 压缩包（flaresolverr_windows_x64.zip）。
 permissions:
   contents: write
@@ -21,12 +23,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  meta:
-    name: Resolve version and create release
-    runs-on: ubuntu-22.04
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      skip: ${{ steps.guard.outputs.skip }}
+  release:
+    name: Build and publish Windows package
+    # miao fork patch：上游是 ubuntu-22.04 + windows-latest 矩阵（linux 出
+    # flaresolverr_linux_x64.tar.gz）。这里只要 Windows 的 onedir 压缩包。
+    runs-on: windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -36,14 +37,16 @@ jobs:
 
       - name: Read version from package.json
         id: version
+        shell: bash
         run: |
-          version=$(python3 -c 'import json;print(json.load(open("package.json"))["version"])')
+          version=$(python -c 'import json;print(json.load(open("package.json"))["version"])')
           echo "package.json version: $version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       # 版本号没变就什么都不做：发版由 bump 驱动，避免每次 push 重复出包。
       - name: Skip when the release already exists
         id: guard
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
@@ -58,59 +61,53 @@ jobs:
       - name: Build changelog
         if: steps.guard.outputs.skip == 'false'
         id: changelog
+        shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          # 排除目标 tag 本身：tag 可能已由旧流程建好，而 release 还没有
-          previous=$(git tag --sort=v:refname | grep -v "^v${VERSION}$" | tail -1)
+          # 先排除目标 tag 本身：tag 可能已由旧流程建好，而 release 还没有
+          previous=$(git tag --sort=v:refname | grep -v "^v${VERSION}$" | tail -1 || true)
+          if [ -z "$previous" ]; then
+            # fork 不会继承上游的历史 tag，基线退回上游同名 tag
+            echo "本仓库没有可用历史 tag，改取上游 tag 作基线"
+            git fetch --quiet https://github.com/FlareSolverr/FlareSolverr.git \
+              "refs/tags/*:refs/tags/*" || true
+            previous=$(git tag --sort=v:refname | grep -v "^v${VERSION}$" | tail -1 || true)
+          fi
           echo "previous tag: ${previous:-<none>}"
           echo "changelog<<EOF" >> "$GITHUB_OUTPUT"
           if [ -n "$previous" ]; then
             git log "${previous}..HEAD" --no-merges --oneline >> "$GITHUB_OUTPUT"
           else
-            git log --no-merges --oneline >> "$GITHUB_OUTPUT"
+            # 兜底：至少别把整条历史都塞进 release body
+            git log -n 30 --no-merges --oneline >> "$GITHUB_OUTPUT"
           fi
           echo "EOF" >> "$GITHUB_OUTPUT"
 
-      # 同一 run 内建 release；tag 不存在时由该 action 一并创建。
-      - name: Create release
-        if: steps.guard.outputs.skip == 'false'
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: v${{ steps.version.outputs.version }}
-          target_commitish: ${{ github.sha }}
-          body: ${{ steps.changelog.outputs.changelog }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  build-package:
-    name: Build Windows onedir zip
-    needs: meta
-    if: needs.meta.outputs.skip == 'false'
-    # miao fork patch：上游是 ubuntu-22.04 + windows-latest 矩阵（linux 出
-    # flaresolverr_linux_x64.tar.gz）。这里只要 Windows 的 onedir 压缩包，
-    # 产物是 dist/flaresolverr_windows_x64.zip。
-    runs-on: windows-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
       - name: Setup Python
+        if: steps.guard.outputs.skip == 'false'
         uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
       - name: Build artifacts
+        if: steps.guard.outputs.skip == 'false'
         run: |
           python -m pip install -r requirements.txt
           python -m pip install pyinstaller==6.22.2
           cd src
           python build_package.py
 
-      - name: Upload release asset
+      # 建 release 与上传资产在同一次 action 调用里完成：tag 不存在时一并创建，
+      # 不再有「先建 release、再按 tag 反查并上传」的窗口期。
+      - name: Publish release
+        if: steps.guard.outputs.skip == 'false'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          files: dist/flaresolverr_windows_x64.zip
+          fail_on_unmatched_files: true
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ needs.meta.outputs.version }}
-        run: gh release upload "v$VERSION" ./dist/flaresolverr_windows_x64.zip --clobber --repo "${{ github.repository }}"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
