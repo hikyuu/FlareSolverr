@@ -66,16 +66,136 @@ def download_chromium():
             os.chmod(exec_path, 0o755)
 
 
+CHROME_FOR_TESTING_MILESTONES = (
+    'https://googlechromelabs.github.io/chrome-for-testing/'
+    'latest-versions-per-milestone-with-downloads.json'
+)
+CHROME_FOR_TESTING_KNOWN_GOOD = (
+    'https://googlechromelabs.github.io/chrome-for-testing/'
+    'known-good-versions-with-downloads.json'
+)
+
+
+def get_chromium_version():
+    """读取 dist_chrome 里 Chromium 的完整版本号（用于挑选同版本的 chromedriver）。"""
+    chrome_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, 'dist_chrome', 'chrome')
+    if not os.path.isdir(chrome_dir):
+        raise Exception("没有找到 %s，请先执行 download_chromium()" % chrome_dir)
+    if os.name == 'nt':
+        import pefile
+        pe = pefile.PE(os.path.join(chrome_dir, 'chrome.exe'), fast_load=True)
+        pe.parse_data_directories(
+            directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_RESOURCE"]]
+        )
+        version = pe.FileInfo[0][0].StringTable[0].entries[b"FileVersion"].decode('utf-8')
+    else:
+        output = subprocess.run([os.path.join(chrome_dir, 'chrome'), '--version'],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
+        version = output.decode('utf-8').strip().split()[-1]
+    return version.strip()
+
+
+def get_driver_platform():
+    if os.name == 'nt':
+        return 'win32'
+    if sys.platform == 'darwin':
+        return 'mac-x64'
+    return 'linux64'
+
+
+def resolve_chromedriver_url(chromium_version):
+    """按 Chromium 大版本找 Chrome for Testing 的 chromedriver 下载地址。"""
+    milestone = chromium_version.split('.')[0]
+    platform_name = get_driver_platform()
+    for api in (CHROME_FOR_TESTING_MILESTONES, CHROME_FOR_TESTING_KNOWN_GOOD):
+        response = requests.get(api, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        if 'milestones' in data:
+            entry = data['milestones'].get(milestone)
+            entries = [entry] if entry else []
+        else:
+            entries = [v for v in data.get('versions', [])
+                       if v['version'].split('.')[0] == milestone]
+        # 同一 milestone 内取最新的 patch 版本
+        for entry in reversed(entries):
+            for item in entry.get('downloads', {}).get('chromedriver', []):
+                if item.get('platform') == platform_name:
+                    return item['url']
+    raise Exception("Chrome for Testing 里没有 Chromium %s 对应的 chromedriver" % chromium_version)
+
+
+def patch_chromedriver(driver_path):
+    """构建期打补丁；失败只告警，运行时 undetected_chromedriver 还会就地重试。"""
+    try:
+        from undetected_chromedriver.patcher import Patcher
+        patcher = Patcher(executable_path=driver_path)
+        if not patcher.is_binary_patched():
+            patcher.patch_exe()
+        print("chromedriver patched: %s" % patcher.is_binary_patched())
+    except Exception as exc:
+        print("WARNING: 构建期打补丁失败，运行时将就地重试：%s" % exc)
+
+
+def download_chromedriver():
+    """把与包内 Chromium 同版本的 chromedriver 放进 dist_chrome，随 PyInstaller 打包。"""
+    version = get_chromium_version()
+    url = resolve_chromedriver_url(version)
+    print("Chromium %s -> chromedriver %s" % (version, url))
+
+    dist_chrome = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, 'dist_chrome')
+    zip_path = os.path.join(dist_chrome, 'chromedriver.zip')
+    with requests.get(url, stream=True, timeout=60) as response:
+        response.raise_for_status()
+        with open(zip_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(dist_chrome)
+    os.remove(zip_path)
+
+    platform_name = get_driver_platform()
+    exe_name = 'chromedriver.exe' if os.name == 'nt' else 'chromedriver'
+    extracted = os.path.join(dist_chrome, 'chromedriver-' + platform_name)
+    target = os.path.join(dist_chrome, exe_name)
+    shutil.move(os.path.join(extracted, exe_name), target)
+    os.chmod(target, 0o755)
+
+    # BSD-3-Clause 要求保留版权声明，许可文件一起随包分发
+    for name in ('LICENSE.chromedriver', 'THIRD_PARTY_NOTICES.chromedriver'):
+        source = os.path.join(extracted, name)
+        if os.path.exists(source):
+            shutil.move(source, os.path.join(dist_chrome, name))
+
+    patch_chromedriver(target)
+    print("chromedriver ready: " + target)
+
+
 def run_pyinstaller():
     sep = ';' if os.name == 'nt' else ':'
     # miao fork patch: --onedir 显式声明。PyInstaller 6.x 的默认值就是 onedir，
     # 但写死它才不会因为上游改默认值而让产物形态（单文件 vs 目录）静默变化。
-    result = subprocess.run([sys.executable, "-m", "PyInstaller",
-                             "--onedir",
-                             "--icon", "resources/flaresolverr_logo.ico",
-                             "--add-data", f"package.json{sep}.",
-                             "--add-data", f"{os.path.join('dist_chrome', 'chrome')}{sep}chrome",
-                             os.path.join("src", "flaresolverr.py")],
+    # miao fork patch: chromedriver 随包分发，运行时由 utils.get_bundled_driver_path()
+    # 直接命中，不再联网下载。许可文件一并带上，满足 BSD-3-Clause 再分发要求。
+    add_data = [
+        f"package.json{sep}.",
+        f"{os.path.join('dist_chrome', 'chrome')}{sep}chrome",
+    ]
+    for extra in ('chromedriver.exe', 'chromedriver',
+                  'LICENSE.chromedriver', 'THIRD_PARTY_NOTICES.chromedriver'):
+        path = os.path.join('dist_chrome', extra)
+        if os.path.exists(path):
+            add_data.append(f"{path}{sep}.")
+
+    pyinstaller_args = [sys.executable, "-m", "PyInstaller",
+                        "--onedir",
+                        "--icon", "resources/flaresolverr_logo.ico"]
+    for item in add_data:
+        pyinstaller_args += ["--add-data", item]
+    pyinstaller_args.append(os.path.join("src", "flaresolverr.py"))
+
+    result = subprocess.run(pyinstaller_args,
                             cwd=os.pardir, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode != 0:
         print(result.stderr.decode('utf-8'))
@@ -119,6 +239,9 @@ if __name__ == "__main__":
 
     print("Downloading Chromium...")
     download_chromium()
+
+    print("Downloading ChromeDriver...")
+    download_chromedriver()
 
     print("Building pyinstaller executable... ")
     run_pyinstaller()

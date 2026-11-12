@@ -123,6 +123,9 @@ This is the recommended way for Windows users.
 - Clone this repository and open a shell in that path.
 - Run `pip install -r requirements.txt` command to install FlareSolverr dependencies.
 - Run `python src/flaresolverr.py` command to start FlareSolverr.
+- (Optional) Set `CHROMEDRIVER_PATH` to a local **already patched** ChromeDriver to skip all driver downloads at startup, e.g. `CHROMEDRIVER_PATH=/path/to/chromedriver python src/flaresolverr.py`.
+
+> The ChromeDriver major version must match the browser's major version. After a browser major upgrade, unset `CHROMEDRIVER_PATH` to fall back to automatic download, or point it to a matching driver.
 
 ### From source code (FreeBSD/TrueNAS CORE)
 

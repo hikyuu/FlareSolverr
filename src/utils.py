@@ -4,6 +4,7 @@ import os
 import platform
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import urllib.parse
@@ -218,13 +219,34 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
     # For normal headless mode:
     # options.add_argument('--headless')
 
-    # if we are inside the Docker container, we avoid downloading the driver
-    driver_exe_path = None
+    # Driver resolution, first four entries never touch the network:
+    #   CHROMEDRIVER_PATH -> driver bundled in the PyInstaller package
+    #   -> Docker's /app/chromedriver -> driver patched earlier in this process
+    # Only when all of them miss we let undetected_chromedriver download one.
+    driver_exe_path = os.environ.get('CHROMEDRIVER_PATH') or None
     version_main = None
-    if os.path.exists("/app/chromedriver"):
+
+    if driver_exe_path is None:
+        driver_exe_path = get_bundled_driver_path()
+        if driver_exe_path is not None:
+            try:
+                chrome_major = get_chrome_major_version()
+            except Exception:
+                chrome_major = ''
+            driver_major = get_driver_major_version(driver_exe_path)
+            if driver_major and chrome_major and driver_major != chrome_major:
+                logging.warning(
+                    'Bundled chromedriver %s does not match Chrome %s, downloading instead',
+                    driver_major, chrome_major)
+                driver_exe_path = None
+            elif chrome_major:
+                version_main = chrome_major
+
+    if driver_exe_path is None and os.name != 'nt' and os.path.exists("/app/chromedriver"):
         # running inside Docker
         driver_exe_path = "/app/chromedriver"
-    else:
+
+    if driver_exe_path is None:
         version_main = get_chrome_major_version()
         if PATCHED_DRIVER_PATH is not None:
             driver_exe_path = PATCHED_DRIVER_PATH
@@ -333,6 +355,28 @@ def get_chrome_major_version() -> str:
 
     CHROME_MAJOR_VERSION = complete_version.split('.')[0].split(' ')[-1]
     return CHROME_MAJOR_VERSION
+
+
+def get_bundled_driver_path() -> Optional[str]:
+    """PyInstaller 包内随包分发的 chromedriver（构建时与包内 Chromium 版本对齐）。"""
+    base = os.path.dirname(os.path.abspath(__file__))
+    for name in ('chromedriver.exe', 'chromedriver'):
+        path = os.path.join(base, name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def get_driver_major_version(exe_path: str) -> Optional[str]:
+    """读取 chromedriver 的大版本；读不到返回 None，调用方按「无法判断」处理。"""
+    try:
+        output = subprocess.run(
+            [exe_path, '--version'], stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, timeout=20).stdout
+    except Exception:
+        return None
+    match = re.search(r'ChromeDriver\s+(\d+)', output.decode('utf-8', 'ignore'))
+    return match.group(1) if match else None
 
 
 def extract_version_nt_executable(exe_path: str) -> str:

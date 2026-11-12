@@ -131,6 +131,10 @@ node_modules/
 # Local bundled Chrome / Chromium used at runtime (see src/utils.py get_chrome_exe_path)
 src/chrome/
 
+# 开发期手动放置的驱动（发布包由 src/build_package.py 生成到 dist_chrome）
+src/chromedriver
+src/chromedriver.exe
+
 # Local javdb automation — 本地实验代码，不属于上游 fork，也不随 release 发布。
 # 内含凭据存取（tools/cred_store.py）、验证码 OCR（tools/ocr-service/）与
 # 浏览器登录脚本，只留在本机工作区，永不推送。
