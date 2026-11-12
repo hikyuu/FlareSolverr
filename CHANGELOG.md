@@ -1,5 +1,12 @@
 # Changelog
 
+## v3.6.1 (2026/11/12)
+* [miao] Bundle the chromedriver matching the bundled Chromium into the Windows
+  release, so the packaged build never downloads a driver at runtime
+* [miao] Tighten the Docker driver check so a path like `D:/app` is no longer
+  mistaken for a container
+* [miao] Declare chromedriver (BSD-3-Clause) in the third-party notices
+
 ## v3.6.0 (2026/11/06)
 * [miao] Expose the CDP debugger ports of permanent sessions via `GET /cdp`
 * [miao] Cover `GET /cdp` with unit tests
